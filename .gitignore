@@ -1,3 +1,6 @@
+# Audit log data (runtime output, not source -- see agents/audit_log.py)
+audit/*.jsonl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
