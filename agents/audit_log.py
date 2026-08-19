@@ -23,9 +23,14 @@ this file.
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+import logging_config  # noqa: F401  (side effect: configures logging)
+
+logger = logging.getLogger(__name__)
 
 AUDIT_LOG_PATH = Path(__file__).resolve().parent.parent / "audit" / "transactions.jsonl"
 GENESIS_HASH = "0" * 64
@@ -68,6 +73,8 @@ def log_transaction(
     decision: str,
     confidence: str,
     routing: str,
+    review_reasons: list | None = None,
+    record_id: str | None = None,
     path: Path = AUDIT_LOG_PATH,
 ) -> dict:
     """Append one complete audit record for a processed transaction.
@@ -78,12 +85,17 @@ def log_transaction(
     subagent's full structured result (or None if the subagent was never
     called because boundary validation rejected the input first).
 
+    record_id is accepted (rather than always generated here) so a caller
+    that also enqueues this transaction elsewhere -- e.g. review_queue.py --
+    can use the same ID in both places. A caller with no such need can omit
+    it and one is generated.
+
     Returns the record that was written, including its computed hash.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     record = {
-        "record_id": str(uuid.uuid4()),
+        "record_id": record_id or str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "input": {
             "sender_name": sender_name,
@@ -105,6 +117,7 @@ def log_transaction(
         "decision": decision,
         "confidence": confidence,
         "routing": routing,
+        "review_reasons": review_reasons or [],
     }
 
     record["prev_record_hash"] = _read_last_record_hash(path)
@@ -112,6 +125,17 @@ def log_transaction(
 
     with path.open("a", encoding="utf-8") as f:
         f.write(_canonical_json(record) + "\n")
+
+    logger.info(
+        "Audit record written",
+        extra={
+            "context": {
+                "record_id": record["record_id"],
+                "decision": decision,
+                "record_hash": record["record_hash"],
+            }
+        },
+    )
 
     return record
 
@@ -158,6 +182,16 @@ def verify_log(path: Path = AUDIT_LOG_PATH) -> dict:
                     f"has been altered since it was written"
                 )
             expected_prev = stored_hash
+
+    if problems:
+        logger.error(
+            "Audit log tampering detected",
+            extra={"context": {"records_checked": count, "problem_count": len(problems)}},
+        )
+    else:
+        logger.info(
+            "Audit log verified intact", extra={"context": {"records_checked": count}}
+        )
 
     return {"valid": len(problems) == 0, "records_checked": count, "problems": problems}
 

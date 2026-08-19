@@ -1,5 +1,8 @@
-# Audit log data (runtime output, not source -- see agents/audit_log.py)
+# Audit log and review queue data (runtime output, not source -- see
+# agents/audit_log.py and agents/review_queue.py)
 audit/*.jsonl
+audit/review_queue/pending/*.json
+audit/review_queue/resolved/*.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

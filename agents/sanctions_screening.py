@@ -17,12 +17,16 @@ for why this separation matters when the input (the name) is attacker-controlled
 """
 
 import json
+import logging
 
 import anthropic
 
+import logging_config  # noqa: F401  (side effect: configures logging)
+from api_utils import SubagentUnavailableError, call_with_retries
+from config.settings import MAX_TOKENS, MODEL
 from validation import is_valid_name
 
-MODEL = "claude-opus-5"
+logger = logging.getLogger(__name__)
 
 # A small, entirely invented watchlist for demonstration purposes only.
 FAKE_SANCTIONS_LIST = [
@@ -143,16 +147,32 @@ def screen_name(name: str, client: anthropic.Anthropic | None = None) -> dict:
     messages = [{"role": "user", "content": f"Screen this name: {name}"}]
 
     while True:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=tools,
-            output_config={
-                "format": {"type": "json_schema", "schema": SANCTIONS_VERDICT_SCHEMA}
-            },
-            messages=messages,
-        )
+        logger.debug("Calling sanctions-screening API", extra={"context": {"name": name}})
+        try:
+            response = call_with_retries(
+                lambda: client.messages.create(
+                    model=MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    tools=tools,
+                    output_config={
+                        "format": {"type": "json_schema", "schema": SANCTIONS_VERDICT_SCHEMA}
+                    },
+                    messages=messages,
+                ),
+                description="sanctions-screening API call",
+            )
+        except SubagentUnavailableError as exc:
+            logger.error(
+                "Sanctions screening unavailable after retries; degrading to UNKNOWN",
+                extra={"context": {"name": name}},
+            )
+            return {
+                "name": name,
+                "verdict": "UNKNOWN",
+                "confidence": "low",
+                "explanation": f"Sanctions screening was unavailable after retries: {exc}",
+            }
 
         if response.stop_reason == "refusal":
             return {

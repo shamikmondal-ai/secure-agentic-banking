@@ -1,6 +1,7 @@
 """Coordinator agent: orchestrates the sanctions-screening and enrichment
 subagents for a transaction, combines their structured verdicts into a
-single decision, and writes a complete audit record of the whole thing.
+single decision, decides whether a human needs to see it, and writes a
+complete audit record of the whole thing.
 
 The coordinator never screens or enriches anything itself -- it holds no
 sanctions list, no risk table, and no lookup tool of its own. It also never
@@ -19,14 +20,29 @@ validation layers; the second lives inside each tool function itself (see
 check_sanctions_list / get_customer_risk_profile), as a backstop in case
 something ever bypasses this one.
 
-Every processed transaction is logged via audit_log.log_transaction() --
-see that module for the record format and its tamper-evidence properties.
+Whether a transaction needs a human is decided by an explicit, named,
+independently-configurable set of rules (see routing_rules.py), not by a
+single derived score -- see that module and process_transaction() below
+for what each rule catches and why routing by signal beats a uniform
+policy (auto-decide everything, or review a random sample of everything).
+
+Every processed transaction is logged via audit_log.log_transaction(); any
+transaction routed to review is also written to the human review queue via
+review_queue.enqueue_for_review() -- see review_queue.py.
 """
 
+import logging
+import uuid
+
+import logging_config  # noqa: F401  (side effect: configures logging)
 from audit_log import log_transaction
 from enrichment import enrich_customer
+from review_queue import enqueue_for_review
+from routing_rules import evaluate_review_rules
 from sanctions_screening import screen_name
 from validation import is_valid_customer_id, is_valid_name
+
+logger = logging.getLogger(__name__)
 
 VALID_SANCTIONS_VERDICTS = {"match", "clear", "invalid"}
 VALID_RISK_SCORES = {"low", "medium", "high", "invalid"}
@@ -49,10 +65,13 @@ def _screen_sender(sender_name: str) -> dict:
     Returns a dict carrying everything needed for both decision-making and
     the audit record: whether boundary validation passed, the rejection
     reason if not, the subagent's full structured result (or None if the
-    subagent was never called), and the normalized verdict used by
-    _decide().
+    subagent was never called), and the normalized verdict used downstream.
     """
     if not is_valid_name(sender_name):
+        logger.warning(
+            "sender_name failed input validation; sanctions subagent not called",
+            extra={"context": {"sender_name": sender_name}},
+        )
         return {
             "boundary_valid": False,
             "boundary_reason": (
@@ -78,10 +97,14 @@ def _enrich_customer(customer_id: str) -> dict:
     Returns a dict carrying everything needed for both decision-making and
     the audit record: whether boundary validation passed, the rejection
     reason if not, the subagent's full structured result (or None if the
-    subagent was never called), and the normalized risk score used by
-    _decide().
+    subagent was never called), and the normalized risk score used
+    downstream.
     """
     if not is_valid_customer_id(customer_id):
+        logger.warning(
+            "customer_id failed input validation; enrichment subagent not called",
+            extra={"context": {"customer_id": customer_id}},
+        )
         return {
             "boundary_valid": False,
             "boundary_reason": (
@@ -100,33 +123,38 @@ def _enrich_customer(customer_id: str) -> dict:
     }
 
 
-def _decide(sanctions_verdict: str, risk_score: str) -> str:
-    """Combine the two subagents' structured verdicts into a single decision.
+def _decide(sanctions_verdict: str, review_reasons: list) -> str:
+    """The final decision.
 
-    This is plain synthesis over two already-computed, schema-validated (or
-    boundary-rejected) fields -- no screening or enrichment logic, and no
-    text scanning, lives here. A rejected ("invalid") or indeterminate
-    ("unknown") field is never treated as safe -- it always forces review.
+    A confirmed sanctions match always blocks -- it's the one outcome
+    conservative enough to auto-decide without waiting for a human, because
+    it's the safe direction to auto-decide in (see
+    docs/governance-mapping.md's Control 6 discussion of auto-block as a
+    "human-on-the-loop," not "human-in-the-loop," pattern -- a blocked party
+    still needs a path to human review after the fact, just not before the
+    block takes effect).
+
+    Otherwise, any fired review rule routes to human review; a transaction
+    is only auto-cleared if zero rules fired. This is what makes "clear"
+    the outcome that has to earn its way there, rather than the default.
     """
     if sanctions_verdict == "match":
         return "block"
-    if sanctions_verdict in ("unknown", "invalid") or risk_score in ("unknown", "invalid"):
-        return "review"
-    if risk_score in ("high", "medium"):
-        return "review"
-    return "clear"
+    return "review" if review_reasons else "clear"
 
 
 def _combine_confidence(sanctions_info: dict, enrichment_info: dict) -> str:
-    """Derive an overall confidence from the two subagents' self-reported
-    confidence fields.
+    """Derive a descriptive overall confidence from the two subagents'
+    self-reported confidence fields. This is informational -- logged
+    alongside the decision for a human's benefit -- and does not itself
+    drive routing; routing_rules.py's low_confidence rule inspects each
+    subagent's raw self-reported confidence directly, which is a more
+    precise signal than this summary.
 
     A rejected or indeterminate field can never yield "high" or "medium"
-    overall confidence, regardless of what the other subagent reported --
-    an unresolved half of the picture caps how confident the whole decision
-    can be. Otherwise, confidence is the weaker of the two subagents' own
-    self-reported confidence, the same "weakest link" pattern _decide()
-    uses for the decision itself.
+    here, regardless of what the other subagent reported -- an unresolved
+    half of the picture caps how confident the whole summary can claim to
+    be.
     """
     if sanctions_info["verdict"] in ("unknown", "invalid"):
         return "low"
@@ -144,22 +172,55 @@ def _combine_confidence(sanctions_info: dict, enrichment_info: dict) -> str:
 
 
 def process_transaction(sender_name: str, customer_id: str, amount: float) -> dict:
-    """Orchestrate a transaction through both subagents, decide, log a
-    complete audit record of the whole thing, and return the decision.
+    """Orchestrate a transaction through both subagents, decide, route,
+    log a complete audit record, enqueue for human review if needed, and
+    return the decision.
 
     Each raw identifier is validated before it is ever handed to a
     subagent; only a conforming identifier is delegated. The decision is
     based solely on each subagent's structured verdict field (or on the
-    boundary rejection) -- never on prose.
+    boundary rejection) -- never on prose. Whether the transaction needs a
+    human is decided by routing_rules.evaluate_review_rules(), an explicit,
+    named, independently-configurable rule set -- not a single score.
     """
+    record_id = str(uuid.uuid4())
+    logger.info(
+        "Processing transaction",
+        extra={
+            "context": {
+                "record_id": record_id,
+                "sender_name": sender_name,
+                "customer_id": customer_id,
+                "amount": amount,
+            }
+        },
+    )
+
     sanctions_info = _screen_sender(sender_name)
     enrichment_info = _enrich_customer(customer_id)
 
     sanctions_verdict = sanctions_info["verdict"]
     risk_score = enrichment_info["verdict"]
-    decision = _decide(sanctions_verdict, risk_score)
+
+    review_reasons = evaluate_review_rules(
+        sanctions_verdict, risk_score, sanctions_info, enrichment_info, amount
+    )
+    decision = _decide(sanctions_verdict, review_reasons)
     confidence = _combine_confidence(sanctions_info, enrichment_info)
     routing = "human_review_required" if decision == "review" else "auto_decided"
+
+    logger.info(
+        "Transaction decided",
+        extra={
+            "context": {
+                "record_id": record_id,
+                "decision": decision,
+                "confidence": confidence,
+                "routing": routing,
+                "review_reasons": [r["rule"] for r in review_reasons],
+            }
+        },
+    )
 
     sanctions_report = (
         sanctions_info["subagent_result"]["explanation"]
@@ -173,6 +234,7 @@ def process_transaction(sender_name: str, customer_id: str, amount: float) -> di
     )
 
     log_transaction(
+        record_id=record_id,
         sender_name=sender_name,
         customer_id=customer_id,
         amount=amount,
@@ -181,7 +243,27 @@ def process_transaction(sender_name: str, customer_id: str, amount: float) -> di
         decision=decision,
         confidence=confidence,
         routing=routing,
+        review_reasons=review_reasons,
     )
+
+    if decision == "review":
+        enqueue_for_review(
+            record_id,
+            {
+                "input": {
+                    "sender_name": sender_name,
+                    "customer_id": customer_id,
+                    "amount": amount,
+                },
+                "decision": decision,
+                "confidence": confidence,
+                "sanctions_verdict": sanctions_verdict,
+                "risk_score": risk_score,
+                "review_reasons": review_reasons,
+                "sanctions_report": sanctions_report,
+                "enrichment_report": enrichment_report,
+            },
+        )
 
     return {
         "sender_name": sender_name,
@@ -190,6 +272,9 @@ def process_transaction(sender_name: str, customer_id: str, amount: float) -> di
         "sanctions_verdict": sanctions_verdict,
         "risk_score": risk_score,
         "decision": decision,
+        "confidence": confidence,
+        "routing": routing,
+        "review_reasons": review_reasons,
         "sanctions_report": sanctions_report,
         "enrichment_report": enrichment_report,
     }
