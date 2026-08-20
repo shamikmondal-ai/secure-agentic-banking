@@ -18,12 +18,16 @@ decisions. See coordinator.py for why this separation matters when the input
 """
 
 import json
+import logging
 
 import anthropic
 
+import logging_config  # noqa: F401  (side effect: configures logging)
+from api_utils import SubagentUnavailableError, call_with_retries
+from config.settings import MAX_TOKENS, MODEL
 from validation import is_valid_customer_id
 
-MODEL = "claude-opus-5"
+logger = logging.getLogger(__name__)
 
 # A small, entirely invented risk-score table for demonstration purposes only.
 FAKE_RISK_PROFILES = {
@@ -155,16 +159,38 @@ def enrich_customer(customer_id: str, client: anthropic.Anthropic | None = None)
     messages = [{"role": "user", "content": f"Look up risk profile for customer: {customer_id}"}]
 
     while True:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=tools,
-            output_config={
-                "format": {"type": "json_schema", "schema": GET_CUSTOMER_RISK_PROFILE_SCHEMA}
-            },
-            messages=messages,
+        logger.debug(
+            "Calling enrichment API", extra={"context": {"customer_id": customer_id}}
         )
+        try:
+            response = call_with_retries(
+                lambda: client.messages.create(
+                    model=MODEL,
+                    max_tokens=MAX_TOKENS,
+                    system=SYSTEM_PROMPT,
+                    tools=tools,
+                    output_config={
+                        "format": {
+                            "type": "json_schema",
+                            "schema": GET_CUSTOMER_RISK_PROFILE_SCHEMA,
+                        }
+                    },
+                    messages=messages,
+                ),
+                description="enrichment API call",
+            )
+        except SubagentUnavailableError as exc:
+            logger.error(
+                "Enrichment unavailable after retries; degrading to unknown",
+                extra={"context": {"customer_id": customer_id}},
+            )
+            return {
+                "customer_id": customer_id,
+                "risk_score": "unknown",
+                "found": False,
+                "confidence": "low",
+                "explanation": f"Enrichment was unavailable after retries: {exc}",
+            }
 
         if response.stop_reason == "refusal":
             return {
