@@ -11,6 +11,9 @@ Every decision is logged to a tamper-evident audit trail; anything the
 system can't safely auto-decide is routed to a human review queue with an
 explicit, named reason.
 
+📐 See [REFERENCE-ARCHITECTURE.md](REFERENCE-ARCHITECTURE.md) for the
+generalized blueprint this implements.
+
 **Key concepts demonstrated:**
 
 - **Least-privilege agents** — each subagent has exactly one tool, enforced structurally (see [How it works](#how-it-works))
