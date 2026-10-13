@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.secure-agentic-banking.example/agent-identity/v1",
+  "title": "Agent identity (v1)",
+  "description": "Who an agent is, who owns it, and how much autonomy it has. What it may do is not stated here; see tool-call-policy-rule.",
+  "type": "object",
+  "required": ["agent_id", "name", "version", "owner", "purpose", "autonomy"],
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$",
+      "description": "Stable, unique, lowercase kebab-case. Never reused after retirement."
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+$", "description": "Semantic version of the agent's behavior (prompt, model, tools)." },
+    "owner": { "type": "string", "minLength": 1, "description": "Accountable team or person." },
+    "purpose": { "type": "string", "minLength": 1 },
+    "autonomy": {
+      "enum": ["human_in_the_loop", "human_on_the_loop", "autonomous"],
+      "description": "Whether a human approves before the action takes effect, after it, or not at all."
+    },
+    "model": { "type": "string", "description": "Optional model identifier the agent runs on." }
+  }
+}

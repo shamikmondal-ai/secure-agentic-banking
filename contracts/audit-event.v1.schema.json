@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.secure-agentic-banking.example/audit-event/v1",
+  "title": "Audit event (v1)",
+  "description": "One line of the append-only, hash-chained audit log written by agents/audit_log.py log_transaction().",
+  "type": "object",
+  "required": [
+    "record_id", "timestamp", "input", "sanctions_screening", "enrichment",
+    "decision", "confidence", "routing", "review_reasons",
+    "prev_record_hash", "record_hash"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "record_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time", "description": "UTC, ISO 8601 with offset." },
+    "input": {
+      "type": "object",
+      "required": ["sender_name", "customer_id", "amount"],
+      "additionalProperties": false,
+      "properties": {
+        "sender_name": { "type": "string" },
+        "customer_id": { "type": "string" },
+        "amount": { "type": "number" }
+      }
+    },
+    "sanctions_screening": {
+      "type": "object",
+      "required": [
+        "boundary_validation_passed", "boundary_rejection_reason",
+        "subagent_called", "subagent_result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "boundary_validation_passed": { "type": "boolean" },
+        "boundary_rejection_reason": { "type": ["string", "null"] },
+        "subagent_called": { "type": "boolean" },
+        "subagent_result": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["verdict", "confidence"],
+              "properties": {
+                "verdict": { "enum": ["MATCH", "CLEAR", "INVALID", "UNKNOWN"] },
+                "confidence": { "$ref": "#/$defs/confidence" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "enrichment": {
+      "type": "object",
+      "required": [
+        "boundary_validation_passed", "boundary_rejection_reason",
+        "subagent_called", "subagent_result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "boundary_validation_passed": { "type": "boolean" },
+        "boundary_rejection_reason": { "type": ["string", "null"] },
+        "subagent_called": { "type": "boolean" },
+        "subagent_result": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["risk_score", "confidence"],
+              "properties": {
+                "risk_score": { "enum": ["low", "medium", "high", "unknown", "invalid"] },
+                "confidence": { "$ref": "#/$defs/confidence" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "decision": { "enum": ["clear", "review", "block"] },
+    "confidence": { "$ref": "#/$defs/confidence" },
+    "routing": { "enum": ["auto_decided", "human_review_required"] },
+    "review_reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "rule": { "type": "string", "minLength": 1 },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "prev_record_hash": { "$ref": "#/$defs/sha256" },
+    "record_hash": { "$ref": "#/$defs/sha256" }
+  },
+  "allOf": [
+    {
+      "description": "Routing is fully determined by decision: only review needs a human.",
+      "if": { "properties": { "decision": { "const": "review" } }, "required": ["decision"] },
+      "then": { "properties": { "routing": { "const": "human_review_required" } } },
+      "else": { "properties": { "routing": { "const": "auto_decided" } } }
+    }
+  ],
+  "$defs": {
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

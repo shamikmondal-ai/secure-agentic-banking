@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.secure-agentic-banking.example/eval-test-case/v1",
+  "title": "Eval test case (v1)",
+  "description": "One labeled transaction-triage test case, as in evals/test_cases.py TEST_CASES.",
+  "type": "object",
+  "required": [
+    "id", "category", "description", "sender_name", "customer_id", "amount",
+    "expected_decision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "category": { "enum": ["clean", "sanctions_match", "injection", "edge_case"] },
+    "description": { "type": "string", "minLength": 1 },
+    "sender_name": { "type": "string" },
+    "customer_id": { "type": "string" },
+    "amount": { "type": "number" },
+    "expected_decision": { "enum": ["clear", "review", "block"] },
+    "expected_sanctions_verdict": { "enum": ["match", "clear", "invalid", "unknown"] },
+    "expected_risk_score": { "enum": ["low", "medium", "high", "invalid", "unknown"] },
+    "known_limitation": { "type": "boolean", "default": false },
+    "notes": { "type": "string" }
+  }
+}
