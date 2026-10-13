@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.secure-agentic-banking.example/tool-call-policy-rule/v1",
+  "title": "Tool-call policy rule (v1)",
+  "description": "One rule deciding whether an agent may call a tool. Evaluation semantics: a call with no matching rule is denied; if any matching rule denies, the call is denied; otherwise require_human_approval beats allow.",
+  "type": "object",
+  "required": ["rule_id", "description", "agent_id", "tool", "effect"],
+  "additionalProperties": false,
+  "properties": {
+    "rule_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^([*]|[a-z][a-z0-9]*(-[a-z0-9]+)*)$",
+      "description": "An agent-identity agent_id, or * for every agent."
+    },
+    "tool": {
+      "type": "string",
+      "pattern": "^([*]|[a-z][a-z0-9_]*)$",
+      "description": "Tool name, or * for every tool."
+    },
+    "effect": { "enum": ["allow", "deny", "require_human_approval"] },
+    "conditions": {
+      "type": "array",
+      "description": "All must hold (logical AND) for the rule to match. Empty or absent means the rule always matches.",
+      "items": {
+        "type": "object",
+        "required": ["argument", "operator", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "argument": { "type": "string", "minLength": 1, "description": "Name of the tool-call argument tested." },
+          "operator": { "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "in", "not_in", "matches"] },
+          "value": {}
+        }
+      }
+    }
+  }
+}
