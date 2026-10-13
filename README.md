@@ -1,5 +1,7 @@
 # Secure Agentic Banking
 
+> 📐 **[Reference Architecture: Safely Deploying Autonomous AI Agents in a Bank](REFERENCE-ARCHITECTURE.md)** — the generalized blueprint this repo implements.
+
 A multi-agent AML/sanctions transaction-triage system, red-teamed by its
 own author — with the vulnerabilities found, the fixes applied, and the
 metrics that verify them.
@@ -10,9 +12,6 @@ and combines their results into a `clear` / `review` / `block` decision.
 Every decision is logged to a tamper-evident audit trail; anything the
 system can't safely auto-decide is routed to a human review queue with an
 explicit, named reason.
-
-📐 See [REFERENCE-ARCHITECTURE.md](REFERENCE-ARCHITECTURE.md) for the
-generalized blueprint this implements.
 
 **Key concepts demonstrated:**
 
