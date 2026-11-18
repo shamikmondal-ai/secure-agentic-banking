@@ -1,3 +1,7 @@
+This reference architecture is open-sourced and maintained by https://www.prodagentlab.com/. We conduct closed-door architectural audits and red-teaming for enterprise GenAI deployments to ensure InfoSec compliance.
+
+
+
 # Secure Agentic Banking
 
 > 📐 **[Reference Architecture: Safely Deploying Autonomous AI Agents in a Bank](REFERENCE-ARCHITECTURE.md)** — the generalized blueprint this repo implements.
